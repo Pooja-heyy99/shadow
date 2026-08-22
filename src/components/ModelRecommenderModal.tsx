@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Sparkles,
   X,
@@ -42,6 +42,7 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
   const [customText, setCustomText] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [recommendationResult, setRecommendationResult] = useState<any>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   if (!isOpen) return null;
 
@@ -53,14 +54,91 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
     { id: 'Autonomous Agent', label: 'Autonomous Agent', icon: '🤖', desc: 'Multi-step goal execution, on-chain actions' },
   ];
 
+  const computeLocalRecommendation = (budgetVal?: number) => {
+    const scoredModels = models.map((m) => {
+      let score = 75;
+      const cat = m.category.toLowerCase();
+      const uCase = useCase.toLowerCase();
+
+      if (cat.includes(uCase) || uCase.includes(cat)) {
+        score += 20;
+      } else if (useCase === 'Trading' && (cat.includes('trading') || m.name.toLowerCase().includes('alpha') || m.name.toLowerCase().includes('chronos'))) {
+        score += 20;
+      } else if (useCase === 'Code & Security' && (cat.includes('security') || cat.includes('code') || m.name.toLowerCase().includes('audit'))) {
+        score += 20;
+      } else if (useCase === 'BioMed' && (cat.includes('bio') || cat.includes('clinical') || cat.includes('med'))) {
+        score += 20;
+      } else if (useCase === 'Vision' && (cat.includes('vision') || cat.includes('image') || cat.includes('fraud'))) {
+        score += 20;
+      }
+
+      if (budgetVal && m.pricePerCallSol <= budgetVal) {
+        score += 8;
+      }
+      if (m.claimedAccuracy >= minSla) {
+        score += 6;
+      }
+      if (m.bondAmountSol >= 400) {
+        score += 5;
+      }
+      if (latencyPref === 'ultra' && m.latencyMs < 300) score += 5;
+      if (latencyPref === 'deep' && m.latencyMs >= 600) score += 3;
+
+      let prompt = `Evaluate performance for ${m.name} on Solana Devnet.`;
+      if (m.category === 'Trading') {
+        prompt = `Analyze arbitrage spread between Raydium CPMM and Orca Whirlpools for SOL/USDC pair with sub-200ms execution constraint.`;
+      } else if (m.category === 'Code & Security') {
+        prompt = `Perform formal verification on an Anchor smart contract transfer instruction to detect missing signer checks and reentrancy bugs.`;
+      } else if (m.category === 'BioMed') {
+        prompt = `Verify clinical differential diagnosis for a patient presenting acute coronary biomarkers with renal contraindications.`;
+      } else if (m.category === 'Vision') {
+        prompt = `Scan a government ID document image for deepfake GAN artifacts and facial biometric inconsistencies.`;
+      }
+
+      return {
+        id: m.id,
+        name: m.name,
+        category: m.category,
+        tagline: m.tagline || m.description,
+        bondAmountSol: m.bondAmountSol,
+        claimedAccuracy: m.claimedAccuracy,
+        pricePerCallSol: m.pricePerCallSol,
+        latencyMs: m.latencyMs,
+        matchScore: Math.min(99, score),
+        keyAdvantage: `Staked with ${m.bondAmountSol} SOL collateral with a ${m.claimedAccuracy}% SLA guarantee.`,
+        recommendedPrompt: prompt,
+      };
+    }).sort((a, b) => b.matchScore - a.matchScore);
+
+    const top = scoredModels[0] || {
+      id: models[0]?.id || 'model-1',
+      name: models[0]?.name || 'QuantumAlpha v4.2',
+      category: models[0]?.category || 'Trading',
+      tagline: models[0]?.tagline || models[0]?.description || 'High-frequency model',
+      bondAmountSol: models[0]?.bondAmountSol || 450,
+      claimedAccuracy: models[0]?.claimedAccuracy || 99.1,
+      pricePerCallSol: models[0]?.pricePerCallSol || 0.08,
+      latencyMs: models[0]?.latencyMs || 240,
+      matchScore: 98,
+      recommendedPrompt: 'Evaluate performance on Solana Devnet.',
+    };
+
+    return {
+      success: true,
+      topRecommendation: top,
+      rankedModels: scoredModels,
+      reasoning: `Matched ${top.name} with a ${top.matchScore}% compatibility score based on your ${useCase} domain selection, ${top.bondAmountSol} SOL on-chain collateral bond, and ${top.claimedAccuracy}% SLA guarantee.`,
+    };
+  };
+
   const handleRunRecommendation = async () => {
     setIsAnalyzing(true);
-    try {
-      let budgetVal = undefined;
-      if (budgetTier === 'low') budgetVal = 0.05;
-      if (budgetTier === 'medium') budgetVal = 0.10;
-      if (budgetTier === 'high') budgetVal = 0.20;
+    let budgetVal: number | undefined = undefined;
+    if (budgetTier === 'low') budgetVal = 0.05;
+    if (budgetTier === 'medium') budgetVal = 0.10;
+    if (budgetTier === 'high') budgetVal = 0.20;
 
+    try {
       const res = await fetch('/api/gemini/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -73,12 +151,24 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
         }),
       });
 
-      const data = await res.json();
-      setRecommendationResult(data);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.topRecommendation) {
+          setRecommendationResult(data);
+        } else {
+          setRecommendationResult(computeLocalRecommendation(budgetVal));
+        }
+      } else {
+        setRecommendationResult(computeLocalRecommendation(budgetVal));
+      }
     } catch (err) {
-      console.error('Recommendation failed:', err);
+      console.warn('Backend recommendation fetch fallback:', err);
+      setRecommendationResult(computeLocalRecommendation(budgetVal));
     } finally {
       setIsAnalyzing(false);
+      setTimeout(() => {
+        resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 120);
     }
   };
 
@@ -262,7 +352,11 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
 
           {/* Results Section */}
           {recommendationResult && (
-            <div className="pt-6 border-t border-purple-500/30 space-y-6 animate-fade-in">
+            <div
+              id="model-recommendation-results-container"
+              ref={resultsRef}
+              className="pt-6 border-t border-purple-500/30 space-y-6 animate-fade-in"
+            >
               
               {/* AI Reasoning Summary */}
               {recommendationResult.reasoning && (
