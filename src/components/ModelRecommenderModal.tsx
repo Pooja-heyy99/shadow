@@ -47,52 +47,104 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
   if (!isOpen) return null;
 
   const useCaseOptions = [
-    { id: 'Trading', label: 'Trading & Arbitrage', icon: '📈', desc: 'DEX routing, flash arbitrage, orderbook signals' },
-    { id: 'Code & Security', label: 'Smart Contract Audit', icon: '🛡️', desc: 'Solana Anchor formal verification, reentrancy' },
-    { id: 'BioMed', label: 'Clinical & Diagnostics', icon: '🧬', desc: 'Biomedical pathology, drug interactions' },
-    { id: 'Vision', label: 'Visual & Fraud Sentinel', icon: '👁️', desc: 'Deepfake detection, KYC document parsing' },
-    { id: 'Autonomous Agent', label: 'Autonomous Agent', icon: '🤖', desc: 'Multi-step goal execution, on-chain actions' },
+    { id: 'Code & Security', label: 'Smart Contract Audit', icon: '🛡️', desc: 'Solana Anchor formal verification, reentrancy, signer checks' },
+    { id: 'Trading', label: 'Trading & Arbitrage', icon: '📈', desc: 'DEX routing, flash arbitrage, orderbook signals, MEV' },
+    { id: 'BioMed', label: 'Clinical & Diagnostics', icon: '🧬', desc: 'Biomedical pathology, drug interactions, clinical reasoning' },
+    { id: 'NLP', label: 'NLP & Legal Logic', icon: '📜', desc: 'Master services agreements, zero-shot structured JSON' },
+    { id: 'Vision', label: 'Visual & Fraud Sentinel', icon: '👁️', desc: 'Deepfake detection, biometric KYC parsing' },
   ];
 
   const computeLocalRecommendation = (budgetVal?: number) => {
     const scoredModels = models.map((m) => {
-      let score = 75;
+      let score = 60;
       const cat = m.category.toLowerCase();
       const uCase = useCase.toLowerCase();
+      const name = m.name.toLowerCase();
+      const desc = (m.description + ' ' + (m.tagline || '')).toLowerCase();
+      const custom = customText.toLowerCase();
 
-      if (cat.includes(uCase) || uCase.includes(cat)) {
-        score += 20;
-      } else if (useCase === 'Trading' && (cat.includes('trading') || m.name.toLowerCase().includes('alpha') || m.name.toLowerCase().includes('chronos'))) {
-        score += 20;
-      } else if (useCase === 'Code & Security' && (cat.includes('security') || cat.includes('code') || m.name.toLowerCase().includes('audit'))) {
-        score += 20;
-      } else if (useCase === 'BioMed' && (cat.includes('bio') || cat.includes('clinical') || cat.includes('med'))) {
-        score += 20;
-      } else if (useCase === 'Vision' && (cat.includes('vision') || cat.includes('image') || cat.includes('fraud'))) {
-        score += 20;
+      // Domain matching with heavy weight
+      if (useCase === 'Code & Security') {
+        if (cat.includes('code') || cat.includes('security') || name.includes('audit') || m.id === 'deepaudit-v2') {
+          score += 35;
+        }
+      } else if (useCase === 'BioMed') {
+        if (cat.includes('bio') || cat.includes('med') || name.includes('biomed') || m.id === 'biomed-oracle') {
+          score += 35;
+        }
+      } else if (useCase === 'NLP') {
+        if (cat.includes('nlp') || name.includes('synapse') || m.id === 'synapse-nlp' || desc.includes('legal')) {
+          score += 35;
+        }
+      } else if (useCase === 'Trading') {
+        if (cat.includes('trading') || name.includes('alpha') || name.includes('chronos') || m.id === 'quantum-alpha' || m.id === 'chronos-arbitrage') {
+          score += 35;
+        }
+      } else if (useCase === 'Vision') {
+        if (cat.includes('vision') || name.includes('vision') || desc.includes('fraud') || desc.includes('visual')) {
+          score += 35;
+        }
       }
 
-      if (budgetVal && m.pricePerCallSol <= budgetVal) {
-        score += 8;
+      // Keyword matching from custom requirements
+      if (custom.length > 0) {
+        if ((custom.includes('audit') || custom.includes('anchor') || custom.includes('rust') || custom.includes('reentrancy') || custom.includes('vulnerability')) && (m.id === 'deepaudit-v2' || cat.includes('code'))) {
+          score += 25;
+        }
+        if ((custom.includes('med') || custom.includes('clinical') || custom.includes('drug') || custom.includes('doctor') || custom.includes('pathology') || custom.includes('patient')) && (m.id === 'biomed-oracle' || cat.includes('bio'))) {
+          score += 25;
+        }
+        if ((custom.includes('trade') || custom.includes('arbitrage') || custom.includes('raydium') || custom.includes('orca') || custom.includes('dex') || custom.includes('slippage') || custom.includes('liquidity')) && (m.id === 'quantum-alpha' || m.id === 'chronos-arbitrage' || cat.includes('trading'))) {
+          score += 25;
+        }
+        if ((custom.includes('legal') || custom.includes('json') || custom.includes('contract') || custom.includes('clause') || custom.includes('nlp') || custom.includes('extract')) && (m.id === 'synapse-nlp' || cat.includes('nlp'))) {
+          score += 25;
+        }
       }
+
+      // Budget scoring
+      if (budgetVal) {
+        if (m.pricePerCallSol <= budgetVal) {
+          score += 10;
+        } else {
+          score -= 15;
+        }
+      }
+
+      // SLA accuracy preference
       if (m.claimedAccuracy >= minSla) {
-        score += 6;
+        score += 8;
+      } else {
+        score -= (minSla - m.claimedAccuracy) * 5;
       }
+
+      // Collateral bond weight
       if (m.bondAmountSol >= 400) {
         score += 5;
       }
-      if (latencyPref === 'ultra' && m.latencyMs < 300) score += 5;
-      if (latencyPref === 'deep' && m.latencyMs >= 600) score += 3;
 
-      let prompt = `Evaluate performance for ${m.name} on Solana Devnet.`;
-      if (m.category === 'Trading') {
-        prompt = `Analyze arbitrage spread between Raydium CPMM and Orca Whirlpools for SOL/USDC pair with sub-200ms execution constraint.`;
-      } else if (m.category === 'Code & Security') {
+      // Latency alignment
+      if (latencyPref === 'ultra' && m.latencyMs <= 200) score += 10;
+      if (latencyPref === 'ultra' && m.latencyMs > 500) score -= 10;
+      if (latencyPref === 'deep' && m.latencyMs >= 500) score += 6;
+
+      // Penalize slashed models slightly unless explicitly within low budget
+      if (m.status === 'slashed' && budgetTier !== 'low') {
+        score -= 20;
+      }
+
+      // Generate dynamic prompt matching
+      let prompt = `Evaluate performance for ${m.name} with verifiable on-chain SLA benchmark.`;
+      if (m.id === 'deepaudit-v2' || m.category === 'Code & Security') {
         prompt = `Perform formal verification on an Anchor smart contract transfer instruction to detect missing signer checks and reentrancy bugs.`;
-      } else if (m.category === 'BioMed') {
+      } else if (m.id === 'biomed-oracle' || m.category === 'BioMed') {
         prompt = `Verify clinical differential diagnosis for a patient presenting acute coronary biomarkers with renal contraindications.`;
-      } else if (m.category === 'Vision') {
-        prompt = `Scan a government ID document image for deepfake GAN artifacts and facial biometric inconsistencies.`;
+      } else if (m.id === 'quantum-alpha') {
+        prompt = `Analyze arbitrage spread between Raydium CPMM and Orca Whirlpools for SOL/USDC pair with sub-200ms execution constraint.`;
+      } else if (m.id === 'chronos-arbitrage') {
+        prompt = `Simulate 3-hop cyclical arbitrage loop: SOL -> BONK -> JUP -> SOL on Orca Whirlpools.`;
+      } else if (m.id === 'synapse-nlp' || m.category === 'NLP') {
+        prompt = `Extract liability caps, indemnity carve-outs, and termination notice days from this master services agreement into strict JSON.`;
       }
 
       return {
@@ -104,30 +156,35 @@ export const ModelRecommenderModal: React.FC<ModelRecommenderModalProps> = ({
         claimedAccuracy: m.claimedAccuracy,
         pricePerCallSol: m.pricePerCallSol,
         latencyMs: m.latencyMs,
-        matchScore: Math.min(99, score),
+        matchScore: Math.min(99, Math.max(45, Math.round(score))),
         keyAdvantage: `Staked with ${m.bondAmountSol} SOL collateral with a ${m.claimedAccuracy}% SLA guarantee.`,
         recommendedPrompt: prompt,
       };
     }).sort((a, b) => b.matchScore - a.matchScore);
 
     const top = scoredModels[0] || {
-      id: models[0]?.id || 'model-1',
+      id: models[0]?.id || 'quantum-alpha',
       name: models[0]?.name || 'QuantumAlpha v4.2',
       category: models[0]?.category || 'Trading',
       tagline: models[0]?.tagline || models[0]?.description || 'High-frequency model',
       bondAmountSol: models[0]?.bondAmountSol || 450,
       claimedAccuracy: models[0]?.claimedAccuracy || 99.1,
-      pricePerCallSol: models[0]?.pricePerCallSol || 0.08,
-      latencyMs: models[0]?.latencyMs || 240,
+      pricePerCallSol: models[0]?.pricePerCallSol || 0.05,
+      latencyMs: models[0]?.latencyMs || 140,
       matchScore: 98,
       recommendedPrompt: 'Evaluate performance on Solana Devnet.',
     };
+
+    let justification = `Matched ${top.name} with a ${top.matchScore}% compatibility score based on your ${useCase} domain selection, ${top.bondAmountSol} SOL on-chain collateral bond, and ${top.claimedAccuracy}% SLA guarantee.`;
+    if (customText.trim()) {
+      justification = `Matched ${top.name} (${top.matchScore}% match) specifically tailored to your custom specifications: "${customText.slice(0, 70)}${customText.length > 70 ? '...' : ''}". Backed by ${top.bondAmountSol} SOL bonded escrow.`;
+    }
 
     return {
       success: true,
       topRecommendation: top,
       rankedModels: scoredModels,
-      reasoning: `Matched ${top.name} with a ${top.matchScore}% compatibility score based on your ${useCase} domain selection, ${top.bondAmountSol} SOL on-chain collateral bond, and ${top.claimedAccuracy}% SLA guarantee.`,
+      reasoning: justification,
     };
   };
 
